@@ -65,7 +65,12 @@ try:
     lecturas.sort(key=lambda dato: int(dato["ts"]))
     riegos.sort(key=lambda dato: int(dato["ts"]))
 
-except (requests.RequestException, ValueError, TypeError, KeyError) as error:
+except (
+    requests.RequestException,
+    ValueError,
+    TypeError,
+    KeyError,
+) as error:
     firebase_error = str(error)
 
 
@@ -81,12 +86,17 @@ if lecturas:
             registros.append({
                 "Fecha y hora": pd.to_datetime(
                     int(dato["ts"]),
-                    unit="ms"
+                    unit="ms",
                 ),
                 "Temperatura (°C)": float(dato["t"]),
                 "Humedad (%)": float(dato["h"]),
             })
-        except (KeyError, TypeError, ValueError, OverflowError):
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            OverflowError,
+        ):
             continue
 
     historico = pd.DataFrame(registros)
@@ -559,7 +569,7 @@ with st.sidebar:
             '<b>Error de conexión</b>',
             unsafe_allow_html=True,
         )
-        st.caption("No se pudo consultar Firebase. Revisa las reglas y la URL.")
+        st.caption(f"Detalle del error: {firebase_error}")
 
     elif not historico.empty:
         st.markdown(
@@ -656,7 +666,7 @@ if seccion == "Vista general":
         </div>
         """, unsafe_allow_html=True)
 
-        st.image(PLANT_IMAGE, use_container_width=True)
+        st.image(PLANT_IMAGE, width="stretch")
 
         st.markdown(
             '<div class="plant-image-caption">Kalanchoe tomentosa · hojas suaves con bordes marrones</div>',
@@ -784,7 +794,7 @@ if seccion == "Vista general":
             ),
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ==========================================================
@@ -817,7 +827,7 @@ elif seccion == "Histórico":
 
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -868,9 +878,7 @@ elif seccion == "Sistema":
     """, unsafe_allow_html=True)
 
     if firebase_error:
-        st.error(
-            "No se pudo leer Firebase. Comprueba la URL y las reglas de acceso."
-        )
+        st.error(f"Detalle del error: {firebase_error}")
 
     elif historico.empty:
         st.info(
