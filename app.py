@@ -2,566 +2,748 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import requests
+from streamlit_autorefresh import st_autorefresh
 
-# =====================================================
-# CONFIGURACIÓN
-# =====================================================
+# ==========================================================
+# VERDANT | Invernadero inteligente
+# ==========================================================
 
 st.set_page_config(
     page_title="VERDANT | Invernadero inteligente",
     page_icon="🌿",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-if "historico" not in st.session_state:
-    st.session_state.historico = pd.DataFrame(
-        columns=["Hora", "Temperatura", "Humedad"]
+# Firebase Realtime Database
+FIREBASE_URL = "https://invernadero-d72ec-default-rtdb.firebaseio.com"
+
+# Actualización automática cada 15 segundos
+st_autorefresh(interval=15_000, key="verdant_actualizacion")
+
+
+# ==========================================================
+# CONEXIÓN CON FIREBASE
+# ==========================================================
+
+def leer_coleccion(nombre):
+    """Lee datos de Firebase mediante su API REST."""
+    url = f"{FIREBASE_URL}/{nombre}.json"
+
+    respuesta = requests.get(url, timeout=10)
+    respuesta.raise_for_status()
+
+    datos = respuesta.json()
+
+    if isinstance(datos, dict):
+        return list(datos.values())
+
+    if isinstance(datos, list):
+        return [dato for dato in datos if dato is not None]
+
+    return []
+
+
+firebase_error = None
+lecturas = []
+riegos = []
+
+try:
+    lecturas = [
+        dato
+        for dato in leer_coleccion("lecturas")
+        if isinstance(dato, dict) and dato.get("ts") is not None
+    ]
+
+    riegos = [
+        dato
+        for dato in leer_coleccion("riegos")
+        if isinstance(dato, dict) and dato.get("ts") is not None
+    ]
+
+    lecturas.sort(key=lambda dato: int(dato["ts"]))
+    riegos.sort(key=lambda dato: int(dato["ts"]))
+
+except (requests.RequestException, ValueError, TypeError, KeyError) as error:
+    firebase_error = str(error)
+
+
+# ==========================================================
+# ORGANIZAR LAS MEDICIONES
+# ==========================================================
+
+if lecturas:
+    registros = []
+
+    for dato in lecturas:
+        try:
+            registros.append({
+                "Fecha y hora": pd.to_datetime(
+                    int(dato["ts"]),
+                    unit="ms"
+                ),
+                "Temperatura (°C)": float(dato["t"]),
+                "Humedad (%)": float(dato["h"]),
+            })
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+
+    historico = pd.DataFrame(registros)
+
+    if not historico.empty:
+        historico = (
+            historico
+            .dropna()
+            .sort_values("Fecha y hora")
+            .reset_index(drop=True)
+        )
+else:
+    historico = pd.DataFrame(
+        columns=[
+            "Fecha y hora",
+            "Temperatura (°C)",
+            "Humedad (%)",
+        ]
     )
 
-# =====================================================
-# ESTILOS
-# =====================================================
+ultima_lectura = (
+    historico.iloc[-1]
+    if not historico.empty
+    else None
+)
+
+ultimo_riego = riegos[-1] if riegos else None
+
+
+# Imagen de referencia de la planta
+PLANT_IMAGE = (
+    "https://latiendadelcactus.com/wp-content/uploads/2017/06/"
+    "kalanchoe-tomentosa.jpg"
+)
+
+
+# ==========================================================
+# ESTILOS VISUALES
+# ==========================================================
 
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap');
 
+:root {
+    --cream: #f7f5e9;
+    --cream2: #fffdf4;
+    --sage: #dce8d0;
+    --sage2: #c4d9ae;
+    --leaf: #729653;
+    --deep: #244d3d;
+    --deep2: #315e4b;
+    --mint: #cde9df;
+    --aqua: #78bcb3;
+    --ink: #24483c;
+    --muted: #6f8779;
+    --line: #d7e1cb;
+}
+
 .stApp {
-    background: #f7f5ed;
-    color: #294b37;
+    color: var(--ink);
+    background:
+      radial-gradient(ellipse at 10% 0%, #dce8d0 0%, transparent 32%),
+      radial-gradient(ellipse at 100% 18%, #d2e8df 0%, transparent 28%),
+      linear-gradient(145deg, #f7f5e9 0%, #f4f3e5 58%, #eef3e5 100%);
     font-family: 'DM Sans', sans-serif;
 }
 
+[data-testid="stHeader"] {
+    background: rgba(247,245,233,.82);
+}
+
 .block-container {
-    max-width: 1450px;
-    padding-top: 2rem;
-    padding-bottom: 3rem;
+    max-width: 1500px;
+    padding-top: 1.35rem;
+    padding-bottom: 2.5rem;
 }
 
-[data-testid="stSidebar"] {
-    background: #e8eee1;
-    border-right: 1px solid #d7e1d0;
+h1, h2, h3, h4 {
+    color: var(--deep) !important;
+    font-family: 'Playfair Display', Georgia, serif !important;
 }
 
-[data-testid="stSidebar"] * {
-    color: #294b37;
+p, label, .stMarkdown, [data-testid="stCaptionContainer"] {
+    color: var(--ink);
+}
+
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #f0f1df 0%, #e5eddc 60%, #dce9d8 100%);
+    border-right: 1px solid #cad9c3;
+}
+
+section[data-testid="stSidebar"] * {
+    color: var(--deep);
+}
+
+section[data-testid="stSidebar"] [data-testid="stRadio"] label {
+    padding: .25rem 0;
+    font-weight: 600;
 }
 
 .brand {
-    font-size: 29px;
+    font-family: 'Playfair Display', Georgia, serif;
+    color: var(--deep);
+    font-size: 31px;
     font-weight: 700;
     letter-spacing: 4px;
-    color: #294b37;
-    margin-bottom: 0;
+    line-height: 1.15;
 }
 
 .brand-sub {
+    color: var(--leaf);
     font-size: 10px;
     letter-spacing: 3px;
-    color: #7b9276;
-    margin-top: 0;
-}
-
-.eyebrow {
-    color: #789273;
-    text-transform: uppercase;
-    letter-spacing: 3px;
-    font-size: 11px;
-    font-weight: 700;
-    margin-bottom: 10px;
-}
-
-.hero-title {
-    font-family: 'Playfair Display', Georgia, serif;
-    font-size: clamp(35px, 4vw, 55px);
-    line-height: 1.12;
-    color: #254b37;
-    font-weight: 600;
-    margin-bottom: 14px;
-}
-
-.hero-description {
-    color: #718171;
-    font-size: 15px;
-    line-height: 1.8;
-    max-width: 700px;
-}
-
-.hero-pill {
-    display: inline-block;
-    background: #e4eddf;
-    color: #426747;
-    border-radius: 30px;
-    padding: 9px 15px;
-    font-size: 11px;
-    letter-spacing: 1px;
-    margin-top: 14px;
-}
-
-.section-title {
-    font-family: 'Playfair Display', Georgia, serif;
-    color: #294b37;
-    font-size: 27px;
-    font-weight: 600;
-}
-
-.section-caption {
-    font-size: 12px;
-    color: #839080;
-    margin-bottom: 18px;
-}
-
-.metric-card {
-    background: #fffefa;
-    border: 1px solid #e4e9de;
-    border-radius: 20px;
-    padding: 22px;
-    min-height: 142px;
-    box-shadow: 0 5px 20px rgba(42,72,47,.04);
-}
-
-.metric-label {
-    color: #788775;
-    font-size: 11px;
-    letter-spacing: 1.3px;
-    font-weight: 700;
-}
-
-.metric-value {
-    font-family: 'Playfair Display', Georgia, serif;
-    font-size: 36px;
-    color: #294b37;
-    margin: 10px 0 4px;
-}
-
-.metric-note {
-    color: #8a9688;
-    font-size: 11px;
-}
-
-.panel {
-    background: #fffefa;
-    border: 1px solid #e4e9de;
-    border-radius: 22px;
-    padding: 22px;
-    box-shadow: 0 5px 20px rgba(42,72,47,.035);
-}
-
-.plant-scene {
-    background: linear-gradient(160deg, #edf2e4, #d6e5c9);
-    border-radius: 24px;
-    padding: 20px;
-    text-align: center;
-    min-height: 320px;
-    overflow: hidden;
-}
-
-.plant-sun {
-    font-size: 34px;
-    text-align: right;
-    margin-right: 16px;
-}
-
-.plant-art {
-    font-family: sans-serif;
-    font-size: 88px;
-    line-height: 1.4;
-    margin: 12px 0;
-}
-
-.plant-name {
-    color: #355d3e;
-    font-family: 'Playfair Display', Georgia, serif;
-    font-size: 23px;
-    font-weight: 600;
-}
-
-.plant-label {
-    font-size: 10px;
-    letter-spacing: 2px;
-    color: #71866c;
-    margin-top: 8px;
-}
-
-.plant-caption {
-    color: #71816e;
-    font-size: 12px;
-    line-height: 1.8;
-    margin-top: 14px;
-}
-
-.status-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 0;
-    border-bottom: 1px solid #edf0e8;
-}
-
-.status-row:last-child {
-    border-bottom: none;
-}
-
-.status-icon {
-    min-width: 42px;
-    height: 42px;
-    border-radius: 14px;
-    background: #e8efe2;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 21px;
-}
-
-.status-title {
-    color: #355640;
-    font-size: 13px;
-    font-weight: 700;
-}
-
-.status-desc {
-    color: #879284;
-    font-size: 11px;
     margin-top: 4px;
 }
 
-.notice {
-    background: #f3efdf;
-    border: 1px solid #e9dfc1;
-    border-radius: 15px;
-    padding: 15px;
-    color: #7e7048;
-    font-size: 12px;
-    line-height: 1.8;
-}
-
-.flow-step {
-    background: #edf2e8;
-    border: 1px solid #dce7d6;
+.sidebar-note {
+    background: #ffffff8c;
+    border: 1px solid #d3dfc9;
     border-radius: 16px;
-    padding: 17px 10px;
-    text-align: center;
-    color: #34573d;
+    padding: 13px;
+    line-height: 1.65;
+    font-size: 12px;
+}
+
+.hero {
+    position: relative;
+    overflow: hidden;
+    border-radius: 28px;
+    border: 1px solid #cbd9bd;
+    background:
+      linear-gradient(90deg, rgba(250,249,235,.97) 0%,
+        rgba(250,249,235,.92) 44%, rgba(250,249,235,.13) 100%),
+      url("https://latiendadelcactus.com/wp-content/uploads/2017/06/kalanchoe-tomentosa.jpg")
+      center 44% / cover no-repeat,
+      linear-gradient(120deg, #e9efd9, #d3e6d8);
+    min-height: 285px;
+    padding: 34px 38px;
+    box-shadow: 0 12px 32px #385d3d12;
+    margin-bottom: 26px;
+}
+
+.hero-content {
+    max-width: 590px;
+    position: relative;
+    z-index: 1;
+}
+
+.hero-kicker {
+    color: var(--leaf);
+    font-size: 11px;
     font-weight: 700;
-    font-size: 13px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
 }
 
-.flow-desc {
-    font-size: 10px;
-    font-weight: 400;
-    color: #83917f;
-    margin-top: 5px;
+.hero h1 {
+    font-size: clamp(35px, 4vw, 54px) !important;
+    line-height: 1.08;
+    margin: 13px 0 12px;
 }
 
-.stButton > button {
-    background: #f9fbf6;
-    border: 1px solid #d8e2d2;
-    color: #31563b;
-    border-radius: 12px;
+.hero p {
+    max-width: 520px;
+    color: #355a4b;
+    line-height: 1.75;
+    font-size: 14px;
+}
+
+.pill {
+    display: inline-block;
+    border-radius: 30px;
+    padding: 8px 13px;
+    margin: 4px 5px 0 0;
+    background: var(--deep2);
+    color: white;
+    font-size: 11px;
     font-weight: 600;
 }
 
-.stButton > button:hover {
-    background: #e8efe2;
-    color: #254b37;
-    border-color: #769b73;
+.pill-light {
+    display: inline-block;
+    border-radius: 30px;
+    padding: 7px 12px;
+    margin: 4px 5px 0 0;
+    background: #ffffffb8;
+    color: var(--deep);
+    border: 1px solid #bdcfb0;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.section-heading {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    color: var(--deep);
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 25px;
+    font-weight: 700;
+    margin: 5px 0 2px;
+}
+
+.section-sub {
+    color: var(--muted);
+    font-size: 12px;
+    margin: 0 0 15px 36px;
+    line-height: 1.6;
+}
+
+.panel {
+    background: rgba(255,253,244,.84);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 21px;
+    box-shadow: 0 8px 25px #35553d0a;
+    margin-bottom: 15px;
+}
+
+.panel-title {
+    color: var(--deep);
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 19px;
+    font-weight: 700;
+}
+
+.panel-sub {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.75;
+    margin-top: 5px;
+}
+
+.sensor-card {
+    min-height: 150px;
+    border: 1px solid #cbdcb8;
+    border-radius: 22px;
+    padding: 20px;
+    background: linear-gradient(135deg, #faffed 0%, #e7f0d8 100%);
+    box-shadow: 0 7px 20px #476b3510;
+    position: relative;
+    overflow: hidden;
+}
+
+.sensor-card:after {
+    content: "❧";
+    position: absolute;
+    right: 6px;
+    bottom: -24px;
+    font-size: 90px;
+    color: #719a5024;
+    transform: rotate(-22deg);
+}
+
+.sensor-card.aqua {
+    background: linear-gradient(135deg, #f1fbf5 0%, #d9eee7 100%);
+    border-color: #bfddd3;
+}
+
+.sensor-label {
+    font-size: 12px;
+    color: #547466;
+    font-weight: 700;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+}
+
+.sensor-value {
+    font-family: 'Playfair Display', Georgia, serif;
+    color: var(--deep);
+    font-size: 39px;
+    font-weight: 700;
+    margin: 8px 0 3px;
+}
+
+.sensor-note {
+    font-size: 10px;
+    color: var(--muted);
+}
+
+.sensor-icon {
+    float: right;
+    font-size: 28px;
+    background: #ffffffa8;
+    border: 1px solid #d4e0c8;
+    border-radius: 50%;
+    width: 53px;
+    height: 53px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.plant-image-caption {
+    color: var(--muted);
+    font-size: 10px;
+    text-align: center;
+    padding-top: 7px;
+}
+
+.care-item {
+    border-bottom: 1px solid #e0e7d6;
+    padding: 8px 0;
+    font-size: 12px;
+    color: var(--deep);
+}
+
+.care-item:last-child {
+    border-bottom: none;
+}
+
+.status-pill {
+    display: inline-block;
+    border-radius: 25px;
+    padding: 7px 11px;
+    background: #f6edcf;
+    color: #7d6730;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #d9ad4a;
+    margin-right: 7px;
+}
+
+.empty-state {
+    text-align: center;
+    border: 1px dashed #c7d7bc;
+    background: #ffffff6b;
+    border-radius: 18px;
+    padding: 30px 15px;
+    color: var(--muted);
+}
+
+.empty-icon {
+    font-size: 34px;
+    margin-bottom: 7px;
+}
+
+.step {
+    border-left: 2px solid #c8d9b8;
+    padding: 1px 0 15px 16px;
+    margin-left: 8px;
+    position: relative;
+}
+
+.step:before {
+    content: "";
+    position: absolute;
+    left: -7px;
+    top: 4px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #86a96a;
+    border: 2px solid #fffdf4;
+}
+
+.step-title {
+    color: var(--deep);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.step-desc {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.6;
+    margin-top: 3px;
+}
+
+div.stButton > button,
+div.stDownloadButton > button {
+    border: 1px solid #6f9457;
+    border-radius: 13px;
+    background: linear-gradient(110deg, #789b59, #a9c77e);
+    color: #fffdf4;
+    font-weight: 700;
+    padding: 10px 15px;
+}
+
+div.stButton > button:hover,
+div.stDownloadButton > button:hover {
+    border-color: #315e4b;
+    background: #315e4b;
+    color: white;
+}
+
+div[data-testid="stDataFrame"] {
+    border: 1px solid var(--line);
+    border-radius: 15px;
+    overflow: hidden;
+}
+
+hr {
+    border-color: #cbd9c3;
 }
 
 .footer {
     text-align: center;
-    color: #91a08e;
-    font-size: 11px;
-    letter-spacing: 1px;
-    padding-top: 20px;
+    padding: 25px 0 5px;
+    color: #78907d;
+    font-size: 10px;
+    letter-spacing: 2px;
 }
 
-hr {
-    border-color: #e2e7dc;
+@media (max-width: 800px) {
+    .hero {
+        padding: 25px;
+        background-position: 62% center;
+    }
+
+    .hero-content {
+        max-width: 100%;
+    }
+
+    .sensor-card {
+        padding: 16px;
+    }
+
+    .sensor-value {
+        font-size: 32px;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
 
 
-# =====================================================
-# BARRA LATERAL
-# =====================================================
+# ==========================================================
+# MENÚ LATERAL
+# ==========================================================
 
 with st.sidebar:
-    st.markdown(
-        '<p class="brand">VERDANT</p>'
-        '<p class="brand-sub">SMART GREENHOUSE</p>',
-        unsafe_allow_html=True
-    )
+    st.markdown('<div style="font-size:38px">🌿</div>', unsafe_allow_html=True)
+    st.markdown('<div class="brand">VERDANT</div>', unsafe_allow_html=True)
+    st.markdown('<div class="brand-sub">SMART GREENHOUSE</div>', unsafe_allow_html=True)
+    st.write("")
+    st.markdown("---")
+    st.markdown("### 🍃 Explorar")
 
-    st.markdown("### 🌱 Navegación")
-
-    pagina = st.radio(
-        "Selecciona una sección",
+    seccion = st.radio(
+        "Secciones",
         ["Vista general", "Histórico", "Sistema"],
-        label_visibility="collapsed"
+        label_visibility="collapsed",
     )
 
     st.markdown("---")
-    st.markdown("#### 🌿 Nuestro propósito")
-    st.caption(
-        "Unir naturaleza y tecnología para cuidar "
-        "las plantas de manera inteligente."
+    st.markdown("### 🪴 Tu planta")
+    st.markdown("**Kalanchoe tomentosa**")
+    st.caption("Planta panda · Hojas aterciopeladas")
+
+    st.markdown(
+        '<div class="sidebar-note">☀️ Luz indirecta brillante<br>'
+        '💧 Riego moderado, cuando el sustrato esté seco<br>'
+        '🌱 Suculenta de hojas carnosas</div>',
+        unsafe_allow_html=True,
     )
 
-    st.markdown("---")
+    st.write("")
 
-    st.markdown("""
-    <div class="notice">
-        <b>Estado del proyecto</b><br>
-        La interfaz está preparada. Las lecturas reales aparecerán
-        cuando se complete la conexión con Arduino y Firebase.
-    </div>
-    """, unsafe_allow_html=True)
+    if firebase_error:
+        st.markdown(
+            '<span class="status-dot" style="background:#c65b45"></span>'
+            '<b>Error de conexión</b>',
+            unsafe_allow_html=True,
+        )
+        st.caption("No se pudo consultar Firebase. Revisa las reglas y la URL.")
+
+    elif not historico.empty:
+        st.markdown(
+            '<span class="status-dot" style="background:#4b9b62"></span>'
+            '<b>Firebase conectado</b>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Lecturas sincronizadas desde la nube.")
+
+    else:
+        st.markdown(
+            '<span class="status-dot"></span>'
+            '<b>Esperando mediciones</b>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Firebase responde; aún no hay lecturas guardadas.")
 
 
-# =====================================================
-# CABECERA
-# =====================================================
-
-st.markdown(
-    '<div class="eyebrow">TU PEQUEÑO ECOSISTEMA</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="hero-title">Un hogar más verde,<br>'
-    'una planta más feliz.</div>',
-    unsafe_allow_html=True
-)
+# ==========================================================
+# PORTADA
+# ==========================================================
 
 st.markdown("""
-<div class="hero-description">
-Bienvenido a tu invernadero inteligente. Un espacio donde
-la naturaleza y la tecnología trabajan juntas para cuidar
-cada hoja, cada gota de agua y cada nuevo crecimiento.
+<div class="hero">
+  <div class="hero-content">
+    <div class="hero-kicker">✦ Naturaleza + tecnología</div>
+    <h1>Tu invernadero,<br>en equilibrio. 🍃</h1>
+    <p>
+      Un espacio inteligente para observar, comprender y cuidar tu planta.
+      Consulta las condiciones ambientales y el historial de mediciones
+      desde una sola pantalla.
+    </p>
+    <span class="pill">❧ Monitoreo ambiental</span>
+    <span class="pill-light">♧ Riego inteligente</span>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<div class="hero-pill">
-    ✿ &nbsp; CULTIVANDO UN FUTURO MÁS VERDE
-</div>
-""", unsafe_allow_html=True)
 
-st.write("")
-
-
-# =====================================================
+# ==========================================================
 # VISTA GENERAL
-# =====================================================
+# ==========================================================
 
-if pagina == "Vista general":
+if seccion == "Vista general":
 
     st.markdown(
-        '<div class="section-title">El bienestar de tu planta</div>'
-        '<div class="section-caption">'
-        'Información ambiental de tu invernadero</div>',
-        unsafe_allow_html=True
+        '<div class="section-heading">🌿 El ambiente de tu planta</div>'
+        '<div class="section-sub">Datos sincronizados desde Firebase y actualizados automáticamente cada 15 segundos.</div>',
+        unsafe_allow_html=True,
     )
 
-    datos = st.session_state.historico
+    if ultima_lectura is not None:
+        temp_text = f"{ultima_lectura['Temperatura (°C)']:.1f}"
+        hum_text = f"{ultima_lectura['Humedad (%)']:.0f}"
+        ultima_hora = ultima_lectura["Fecha y hora"].strftime(
+            "%d/%m/%Y · %H:%M:%S"
+        )
+    else:
+        temp_text = "—"
+        hum_text = "—"
+        ultima_hora = "Esperando lectura real del DHT11"
 
-    temp = None
-    hum = None
+    left, right = st.columns(2, gap="medium")
 
-    if not datos.empty:
-        temp = datos.iloc[-1]["Temperatura"]
-        hum = datos.iloc[-1]["Humedad"]
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        valor = f"{temp:.1f} °C" if temp is not None else "—"
-
+    with left:
         st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">☀️ TEMPERATURA</div>
-            <div class="metric-value">{valor}</div>
-            <div class="metric-note">Ambiente del invernadero</div>
+        <div class="sensor-card">
+          <div class="sensor-icon">🌡️</div>
+          <div class="sensor-label">Temperatura ambiente</div>
+          <div class="sensor-value">{temp_text} <span style="font-size:18px">°C</span></div>
+          <div class="sensor-note">Última lectura: {ultima_hora}</div>
         </div>
         """, unsafe_allow_html=True)
 
-    with col2:
-        valor = f"{hum:.1f} %" if hum is not None else "—"
-
+    with right:
         st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">💧 HUMEDAD</div>
-            <div class="metric-value">{valor}</div>
-            <div class="metric-note">Humedad relativa del aire</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col3:
-        estado = "Sin conexión" if datos.empty else "Con datos"
-
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">🌿 ESTADO</div>
-            <div class="metric-value" style="font-size:26px">
-                {estado}
-            </div>
-            <div class="metric-note">Recepción de mediciones</div>
+        <div class="sensor-card aqua">
+          <div class="sensor-icon">💧</div>
+          <div class="sensor-label">Humedad ambiental</div>
+          <div class="sensor-value">{hum_text} <span style="font-size:18px">%</span></div>
+          <div class="sensor-note">Última lectura: {ultima_hora}</div>
         </div>
         """, unsafe_allow_html=True)
 
     st.write("")
-    st.write("")
 
-    izquierda, derecha = st.columns([1, 1], gap="large")
+    plant_col, system_col = st.columns([1.12, 1], gap="large")
 
-    # PLANTA
-    with izquierda:
+    with plant_col:
+        st.markdown("""
+        <div class="panel">
+          <div class="panel-title">🌱 Conoce tu planta</div>
+          <div class="panel-sub">KALANCHOE TOMENTOSA · PLANTA PANDA</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.image(PLANT_IMAGE, use_container_width=True)
+
         st.markdown(
-            '<div class="section-title">Un rincón de naturaleza</div>'
-            '<div class="section-caption">'
-            'Inspiración botánica para tu invernadero</div>',
-            unsafe_allow_html=True
+            '<div class="plant-image-caption">Kalanchoe tomentosa · hojas suaves con bordes marrones</div>',
+            unsafe_allow_html=True,
         )
 
         st.markdown("""
-        <div class="plant-scene">
-            <div class="plant-sun">☀️</div>
-            <div class="plant-art">🌿</div>
-            <div style="font-size:38px;line-height:1.3">
-                🍃 🪴 🍃
-            </div>
-            <div class="plant-name">Un espacio para crecer</div>
-            <div class="plant-label">
-                CRECER · CUIDAR · FLORECER
-            </div>
+        <div class="panel">
+          <div class="panel-title">🌼 Cuidados de tu suculenta</div>
+          <div class="panel-sub">Pequeños cuidados para mantenerla saludable.</div>
+          <div class="care-item">☀️ <b>Luz:</b> brillante e indirecta</div>
+          <div class="care-item">💧 <b>Riego:</b> moderado; deja secar el sustrato</div>
+          <div class="care-item">🪴 <b>Sustrato:</b> suelto y con buen drenaje</div>
+          <div class="care-item">🌿 <b>Hojas:</b> carnosas y cubiertas de pelitos</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with system_col:
+        if ultimo_riego:
+            try:
+                riego_fecha = pd.to_datetime(
+                    int(ultimo_riego["ts"]), unit="ms"
+                ).strftime("%d/%m/%Y · %H:%M:%S")
+                estado_riego = f"Último evento de riego registrado: {riego_fecha}"
+            except (ValueError, TypeError, KeyError):
+                estado_riego = "Hay un evento de riego guardado en Firebase."
+        else:
+            estado_riego = "Todavía no hay eventos de riego registrados."
+
+        st.markdown(f"""
+        <div class="panel">
+          <div class="panel-title">💧 Sistema de riego</div>
+          <div class="panel-sub">ESTADO DE LA BOMBA Y DEL RELÉ</div>
+          <br>
+          <span class="status-pill">
+            <span class="status-dot"></span>
+            {'Evento de riego registrado' if ultimo_riego else 'Sin eventos registrados'}
+          </span>
+          <p style="font-size:12px;line-height:1.8;margin-top:15px">{estado_riego}</p>
+          <p style="font-size:11px;line-height:1.7">
+            Esta tarjeta informa los eventos guardados en Firebase;
+            no activa la bomba física desde Streamlit.
+          </p>
         </div>
         """, unsafe_allow_html=True)
 
         st.markdown("""
-        <div class="plant-caption">
-            <b>La protagonista de nuestro invernadero.</b><br>
-            Observamos las condiciones ambientales para acompañar
-            el crecimiento de nuestras plantas y crear un espacio
-            lleno de vida.
+        <div class="panel">
+          <div class="panel-title">🌐 Conexión del sistema</div>
+          <div class="panel-sub">Así viajan las lecturas hasta tu panel.</div>
+          <br>
+          <div class="step">
+            <div class="step-title">01 · Arduino Uno</div>
+            <div class="step-desc">Lee el sensor DHT11.</div>
+          </div>
+          <div class="step">
+            <div class="step-title">02 · Programa Python</div>
+            <div class="step-desc">Recibe los datos por el cable USB y los envía a Firebase.</div>
+          </div>
+          <div class="step">
+            <div class="step-title">03 · Firebase</div>
+            <div class="step-desc">Guarda las mediciones reales en la nube.</div>
+          </div>
+          <div class="step" style="padding-bottom:0">
+            <div class="step-title">04 · VERDANT</div>
+            <div class="step-desc">Actualiza los valores y el histórico automáticamente.</div>
+          </div>
         </div>
         """, unsafe_allow_html=True)
-
-    # CENTRO DE CONTROL CORREGIDO
-    with derecha:
-        st.markdown(
-            '<div class="section-title">Centro de control</div>'
-            '<div class="section-caption">'
-            'Los elementos de tu invernadero</div>',
-            unsafe_allow_html=True
-        )
-
-        componentes = [
-            ("🌡️", "Sensor DHT11",
-             "Mide temperatura y humedad ambiental"),
-            ("🧠", "Arduino Uno",
-             "Lee y procesa los datos del sensor"),
-            ("💦", "Bomba de agua",
-             "Accionamiento mediante módulo relé"),
-            ("☁️", "Firebase",
-             "Almacena las mediciones en la nube")
-        ]
-
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-
-        for emoji, titulo, descripcion in componentes:
-            st.markdown(
-                f"""
-                <div class="status-row">
-                    <div class="status-icon">{emoji}</div>
-                    <div>
-                        <div class="status-title">{titulo}</div>
-                        <div class="status-desc">{descripcion}</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        st.write("")
-
-        st.markdown("""
-        <div class="notice">
-            <b>🌱 Conexión pendiente</b><br>
-            La página todavía no está recibiendo datos reales.
-            Conectaremos Arduino, Python y Firebase para actualizar
-            las mediciones automáticamente.
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.write("")
-    st.write("")
-
-    # FLUJO DE DATOS
-    st.markdown(
-        '<div class="section-title">Cómo funciona la magia</div>'
-        '<div class="section-caption">El recorrido de los datos</div>',
-        unsafe_allow_html=True
-    )
-
-    columnas = st.columns(4)
-
-    pasos = [
-        ("🌡️", "Arduino", "Lee los sensores"),
-        ("💻", "Python", "Envía los datos"),
-        ("☁️", "Firebase", "Guarda las lecturas"),
-        ("🌿", "VERDANT", "Muestra los resultados")
-    ]
-
-    for columna, (emoji, titulo, descripcion) in zip(columnas, pasos):
-        with columna:
-            st.markdown(f"""
-            <div class="flow-step">
-                <div style="font-size:26px">{emoji}</div>
-                <div style="margin-top:7px">{titulo}</div>
-                <div class="flow-desc">{descripcion}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.write("")
-    st.caption(
-        "La interfaz aún no acciona la bomba física. "
-        "Su control requiere completar y probar la conexión electrónica."
-    )
-
-
-# =====================================================
-# HISTÓRICO
-# =====================================================
-
-elif pagina == "Histórico":
 
     st.markdown(
-        '<div class="eyebrow">MEMORIA DEL INVERNADERO</div>'
-        '<div class="section-title">Histórico ambiental</div>'
-        '<div class="section-caption">'
-        'Consulta las mediciones recibidas por el sistema.</div>',
-        unsafe_allow_html=True
+        '<div class="section-heading">📈 Histórico ambiental</div>'
+        '<div class="section-sub">Las gráficas se generan con las mediciones guardadas en Firebase.</div>',
+        unsafe_allow_html=True,
     )
 
-    datos = st.session_state.historico
+    df = historico.copy()
 
-    if datos.empty:
+    if df.empty:
         st.markdown("""
-        <div class="panel" style="text-align:center;padding:45px 20px;">
-            <div style="font-size:55px;">🌱</div>
-            <div style="font-family:'Playfair Display',Georgia,serif;
-                        font-size:26px;color:#294b37;margin:15px 0;">
-                Tu historia comienza aquí
-            </div>
-            <div style="color:#819080;font-size:13px;line-height:1.8;">
-                Aún no hay mediciones registradas.<br>
-                Al conectar Firebase, aquí aparecerá el historial real
-                de temperatura y humedad.
-            </div>
+        <div class="empty-state">
+          <div class="empty-icon">🌱</div>
+          <b style="color:#315e4b">Tu histórico comienza aquí</b>
+          <p style="font-size:12px">
+            Todavía no hay mediciones registradas.<br>
+            Cuando el sistema guarde lecturas en Firebase, aparecerán aquí.
+          </p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -569,132 +751,158 @@ elif pagina == "Histórico":
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(
-            x=datos["Hora"],
-            y=datos["Temperatura"],
-            name="Temperatura (°C)",
+            x=df["Fecha y hora"],
+            y=df["Temperatura (°C)"],
             mode="lines+markers",
-            line=dict(color="#477c53", width=3)
+            name="Temperatura",
+            line=dict(color="#789b59", width=3, shape="spline"),
         ))
 
         fig.add_trace(go.Scatter(
-            x=datos["Hora"],
-            y=datos["Humedad"],
-            name="Humedad (%)",
+            x=df["Fecha y hora"],
+            y=df["Humedad (%)"],
             mode="lines+markers",
-            line=dict(color="#d1ad5b", width=3),
-            yaxis="y2"
+            name="Humedad",
+            line=dict(color="#4caaa0", width=3, shape="spline"),
+            yaxis="y2",
         ))
 
         fig.update_layout(
-            paper_bgcolor="#fffefa",
-            plot_bgcolor="#fffefa",
-            font=dict(color="#49604b"),
-            margin=dict(l=15, r=15, t=40, b=15),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(255,253,244,.6)",
+            font=dict(color="#315e4b"),
+            height=360,
+            margin=dict(l=10, r=10, t=35, b=10),
             legend=dict(orientation="h", y=1.12),
-            xaxis=dict(title="Hora", gridcolor="#edf0e8"),
-            yaxis=dict(
-                title="Temperatura (°C)",
-                gridcolor="#edf0e8"
-            ),
+            xaxis=dict(title="Fecha y hora", gridcolor="#dfe7d8"),
+            yaxis=dict(title="Temperatura (°C)", gridcolor="#dfe7d8"),
             yaxis2=dict(
                 title="Humedad (%)",
                 overlaying="y",
                 side="right",
-                showgrid=False
+                showgrid=False,
             ),
-            hovermode="x unified"
         )
 
         st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("#### Registro de mediciones")
-        st.dataframe(datos, use_container_width=True, hide_index=True)
 
-        st.download_button(
-            "⬇️ Descargar histórico CSV",
-            data=datos.to_csv(index=False).encode("utf-8"),
-            file_name="historico_invernadero.csv",
-            mime="text/csv"
-        )
+# ==========================================================
+# HISTÓRICO
+# ==========================================================
 
-
-# =====================================================
-# SISTEMA
-# =====================================================
-
-elif pagina == "Sistema":
+elif seccion == "Histórico":
 
     st.markdown(
-        '<div class="eyebrow">TECNOLOGÍA Y NATURALEZA</div>'
-        '<div class="section-title">Arquitectura del sistema</div>'
-        '<div class="section-caption">'
-        'Los componentes que hacen posible nuestro invernadero.'
-        '</div>',
-        unsafe_allow_html=True
+        '<div class="section-heading">📚 Bitácora de mediciones</div>'
+        '<div class="section-sub">Registro cronológico de las lecturas del invernadero.</div>',
+        unsafe_allow_html=True,
     )
 
-    componentes_sistema = [
-        ("🌡️", "DHT11 — Sensor ambiental",
-         "Mide la temperatura y la humedad del aire."),
-        ("🔌", "Arduino Uno — Controlador",
-         "Lee las mediciones y se comunica por USB."),
-        ("💧", "Relé de 5 V y bomba",
-         "Permiten controlar el riego mediante un circuito adecuado."),
-        ("💻", "Python — Comunicación",
-         "Lee los datos seriales y los envía a Firebase."),
-        ("☁️", "Firebase — Base de datos",
-         "Almacena las lecturas para consultarlas desde la web.")
-    ]
+    df = historico.copy()
 
-    for emoji, titulo, descripcion in componentes_sistema:
-        st.markdown(f"""
-        <div class="panel" style="margin-bottom:12px;">
-            <div class="status-row">
-                <div class="status-icon">{emoji}</div>
-                <div style="flex:1">
-                    <div class="status-title">{titulo}</div>
-                    <div class="status-desc">{descripcion}</div>
-                </div>
-                <div style="font-size:10px;font-weight:700;color:#a17f3e;">
-                    PENDIENTE
-                </div>
-            </div>
+    if df.empty:
+        st.markdown("""
+        <div class="empty-state">
+          <div class="empty-icon">🍃</div>
+          <b style="color:#315e4b">Todavía no hay registros</b>
+          <p style="font-size:12px">
+            Las mediciones aparecerán cuando se guarden en Firebase.
+          </p>
         </div>
         """, unsafe_allow_html=True)
 
-    st.write("")
+    else:
+        df = df.sort_values("Fecha y hora", ascending=False)
+
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        csv = df.to_csv(index=False).encode("utf-8")
+
+        st.download_button(
+            "📥 Descargar histórico CSV",
+            data=csv,
+            file_name="historico_invernadero.csv",
+            mime="text/csv",
+        )
+
+
+# ==========================================================
+# SISTEMA
+# ==========================================================
+
+elif seccion == "Sistema":
+
+    st.markdown(
+        '<div class="section-heading">⚙️ Centro de conexión</div>'
+        '<div class="section-sub">Estado de la conexión y recorrido de los datos.</div>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown("""
-    <div class="notice">
-        <b>¿Cómo se conectan?</b><br>
-        Arduino Uno → USB → Python → Firebase → Página web.<br><br>
-        El computador puede funcionar como puente entre Arduino y Firebase.
-        La bomba necesita una conexión eléctrica adecuada y pruebas seguras
-        antes de activar el riego.
+    <div class="panel">
+      <div class="panel-title">🔌 Arquitectura del invernadero</div>
+      <div class="panel-sub">El recorrido previsto para los datos del sensor.</div>
+      <br>
+      <div class="step">
+        <div class="step-title">01 · Arduino Uno</div>
+        <div class="step-desc">Lee la temperatura y la humedad con el DHT11.</div>
+      </div>
+      <div class="step">
+        <div class="step-title">02 · Programa Python en el computador</div>
+        <div class="step-desc">Lee el puerto serial USB y envía las mediciones a Firebase.</div>
+      </div>
+      <div class="step">
+        <div class="step-title">03 · Firebase</div>
+        <div class="step-desc">Almacena las mediciones para que el panel pueda consultarlas.</div>
+      </div>
+      <div class="step" style="padding-bottom:0">
+        <div class="step-title">04 · Panel VERDANT</div>
+        <div class="step-desc">Muestra valores reales, gráficas e histórico.</div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
-    st.write("")
-    st.markdown("#### Próximos pasos")
+    if firebase_error:
+        st.error(
+            "No se pudo leer Firebase. Comprueba la URL y las reglas de acceso."
+        )
 
-    st.markdown("""
-    - [ ] Comprobar el sensor DHT11.
-    - [ ] Leer los datos por el puerto serial.
-    - [ ] Configurar Firebase.
-    - [ ] Conectar el programa Python.
-    - [ ] Mostrar las mediciones reales en la página.
-    - [ ] Configurar y probar el control de riego.
-    """)
+    elif historico.empty:
+        st.info(
+            "Firebase se está consultando, pero todavía no hay mediciones. "
+            "Cuando el programa que recibe el Arduino guarde datos en "
+            "'lecturas', aparecerán aquí."
+        )
+
+    else:
+        st.success(
+            f"Firebase conectado. Hay {len(historico)} mediciones disponibles. "
+            "El panel se actualiza cada 15 segundos."
+        )
+
+    st.markdown("### 📡 Datos recibidos")
+
+    st.write(f"**Mediciones ambientales:** {len(historico)}")
+    st.write(f"**Eventos de riego:** {len(riegos)}")
+
+    if not historico.empty:
+        st.write(
+            "**Última lectura:** "
+            + historico.iloc[-1]["Fecha y hora"].strftime("%d/%m/%Y %H:%M:%S")
+        )
 
 
-# =====================================================
+# ==========================================================
 # PIE DE PÁGINA
-# =====================================================
-
-st.markdown("---")
+# ==========================================================
 
 st.markdown("""
 <div class="footer">
-    VERDANT · CULTIVANDO TECNOLOGÍA, CUIDANDO LA NATURALEZA 🌿
+  VERDANT · CULTIVAR CON INTELIGENCIA · CUIDAR CON NATURALEZA 🌿
 </div>
 """, unsafe_allow_html=True)
